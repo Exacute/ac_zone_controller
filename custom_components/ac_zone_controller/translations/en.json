@@ -1,0 +1,104 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect the Daikin and shared sensors",
+        "description": "Select the physical climate entity. The integration follows its heat/cool choice and will not switch between those modes.",
+        "data": {
+          "name": "Integration name",
+          "climate": "Daikin climate entity",
+          "power_switch": "Daikin power switch",
+          "house_temperature": "House average temperature",
+          "doors": "Door contact sensors",
+          "solar_generation": "PV generation sensor",
+          "solar_load": "House load sensor",
+          "grid_power": "Grid import/export sensor",
+          "battery_soc": "Battery state of charge sensor",
+          "solar_active": "External JARVIS solar ownership flag",
+          "gain_snapshot": "Saved room gain snapshot input_text",
+          "smart_control": "Master smart-control enable helper",
+          "heat_adjust_up": "Heating target increase button",
+          "heat_adjust_down": "Heating target decrease button"
+        }
+      },
+      "room": {
+        "title": "Add a room thermostat",
+        "description": "Configure this room's sensor, vent, optional zone enable helper, presence media players, and gain helper.",
+        "data": {
+          "name": "Room name",
+          "temperature_sensor": "Room temperature sensor",
+          "cover": "Vent cover",
+          "enabled_entity": "Room enabled helper",
+          "presence_entities": "Media players used as presence signals",
+          "gain_entity": "Existing gain input_number helper"
+        }
+      },
+      "more_rooms": {
+        "title": "Add another room?",
+        "description": "Add each room that should have its own thermostat target.",
+        "menu_options": {
+          "room": "Add a room",
+          "finish": "Finish setup"
+        }
+      }
+    },
+    "error": {
+      "invalid_room_name": "Enter a room name containing at least one letter or number.",
+      "duplicate_room": "A room with this name already exists."
+    },
+    "abort": {}
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Manage AC rooms",
+        "menu_options": {
+          "add_room": "Add a room",
+          "edit_room": "Edit a room",
+          "remove_room": "Remove a room"
+        }
+      },
+      "add_room": {
+        "title": "Add a room thermostat",
+        "data": {
+          "name": "Room name",
+          "temperature_sensor": "Room temperature sensor",
+          "cover": "Vent cover",
+          "enabled_entity": "Room enabled helper",
+          "presence_entities": "Media players used as presence signals",
+          "gain_entity": "Existing gain input_number helper"
+        }
+      },
+      "edit_room": {
+        "title": "Choose a room",
+        "data": {
+          "key": "Room"
+        }
+      },
+      "edit_details": {
+        "title": "Edit room",
+        "data": {
+          "name": "Room name",
+          "temperature_sensor": "Room temperature sensor",
+          "cover": "Vent cover",
+          "enabled_entity": "Room enabled helper",
+          "presence_entities": "Media players used as presence signals",
+          "gain_entity": "Existing gain input_number helper"
+        }
+      },
+      "remove_room": {
+        "title": "Remove a room",
+        "data": {
+          "key": "Room"
+        }
+      }
+    },
+    "abort": {
+      "no_rooms": "No rooms are configured."
+    },
+    "error": {
+      "invalid_room_name": "Enter a room name containing at least one letter or number.",
+      "duplicate_room": "A room with this name already exists."
+    }
+  }
+}

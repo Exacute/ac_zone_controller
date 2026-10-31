@@ -1,0 +1,10 @@
+{
+  "domain": "ac_zone_controller",
+  "name": "AC Zone Controller",
+  "codeowners": ["@Exacute"],
+  "config_flow": true,
+  "documentation": "https://github.com/Exacute/ac_zone_controller",
+  "issue_tracker": "https://github.com/Exacute/ac_zone_controller/issues",
+  "iot_class": "local_push",
+  "version": "0.1.0"
+}

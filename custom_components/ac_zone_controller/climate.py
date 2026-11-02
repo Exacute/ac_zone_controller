@@ -27,7 +27,7 @@ class RoomThermostat(CoordinatorEntity[ACZoneCoordinator], ClimateEntity):
 
     _attr_has_entity_name = True
     _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_min_temp = 16.0
     _attr_max_temp = 30.0
     _attr_target_temperature_step = 0.5
@@ -61,7 +61,7 @@ class RoomThermostat(CoordinatorEntity[ACZoneCoordinator], ClimateEntity):
         return [mode] if mode else []
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         """Return this room's sensor value."""
         state = self.coordinator.state(self.room[CONF_ROOM_TEMPERATURE])
         try:
@@ -70,7 +70,7 @@ class RoomThermostat(CoordinatorEntity[ACZoneCoordinator], ClimateEntity):
             return None
 
     @property
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         """Return this room's target for the selected global mode."""
         mode = self.coordinator.selected_mode()
         if mode not in (HVACMode.HEAT, HVACMode.COOL):

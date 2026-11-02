@@ -123,12 +123,26 @@ class ACSettingNumber(CoordinatorEntity[ACZoneCoordinator], NumberEntity):
         self._attr_native_max_value = description.maximum
         self._attr_native_step = description.step
         self._attr_native_unit_of_measurement = description.unit
-        self._attr_device_info = {
-            "identifiers": {("ac_zone_controller", coordinator.entry.entry_id)},
-            "name": "AC Zone Controller",
-            "manufacturer": "AC Zone Controller",
-            "model": "Room coordinator",
-        }
+        if description.room_key:
+            room = next(
+                item for item in coordinator.rooms
+                if item[CONF_ROOM_KEY] == description.room_key
+            )
+            self._attr_device_info = {
+                "identifiers": {
+                    ("ac_zone_controller", coordinator.entry.entry_id, description.room_key)
+                },
+                "name": f"{room[CONF_ROOM_NAME]} AC zone",
+                "manufacturer": "AC Zone Controller",
+                "model": "Virtual room thermostat",
+            }
+        else:
+            self._attr_device_info = {
+                "identifiers": {("ac_zone_controller", coordinator.entry.entry_id)},
+                "name": "AC Zone Controller",
+                "manufacturer": "AC Zone Controller",
+                "model": "Room coordinator",
+            }
 
     @property
     def native_value(self) -> float:

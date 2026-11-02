@@ -112,6 +112,7 @@ class ACSettingNumber(CoordinatorEntity[ACZoneCoordinator], NumberEntity):
         coordinator: ACZoneCoordinator,
         description: SettingDescription,
     ) -> None:
+        """Create a number entity backed by a global or room setting."""
         super().__init__(coordinator)
         self.description = description
         self._attr_name = description.name

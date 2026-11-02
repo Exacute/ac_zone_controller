@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import timedelta
 import json
 import logging
+from time import monotonic
 from typing import Any
 
 from homeassistant.components.climate.const import HVACMode
@@ -34,6 +35,7 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinate room thermostats through one manually selected Daikin mode."""
 
     def __init__(self, hass: HomeAssistant, entry: Any) -> None:
+        """Prepare room state, persistent storage, and report scheduling."""
         super().__init__(hass, _LOGGER, config_entry=entry, name=DOMAIN,
                          update_interval=timedelta(seconds=30))
         self.entry = entry
@@ -63,6 +65,22 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.solar_offset = 0.0
         self.zone_status: dict[str, dict[str, Any]] = {}
         self._adjust_states: dict[str, bool] = {}
+        # Wait a full interval after startup so loading or reloading the entry
+        # does not itself send a status report.
+        self.notification_targets = list(
+            entry.options.get(CONF_NOTIFICATION_TARGETS, [])
+        )
+        self.notification_interval = max(
+            5,
+            int(entry.options.get(
+                CONF_NOTIFICATION_INTERVAL, DEFAULT_NOTIFICATION_INTERVAL
+            )),
+        )
+        self._next_notification_at = (
+            monotonic() + self.notification_interval * 60
+            if self.notification_targets
+            else None
+        )
 
     async def async_start(self) -> None:
         """Restore state, watch inputs, and start periodic control."""
@@ -107,13 +125,16 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._unsubscribers.clear()
 
     async def _handle_state_change(self, event: Event) -> None:
+        """Recalculate control and entity state when a watched input changes."""
         await self.async_request_refresh()
 
     async def _async_update_data(self) -> dict[str, Any]:
+        """Run one control cycle and expose the latest coordinator state."""
         if not self._loaded:
             raise UpdateFailed("Controller state has not loaded")
         try:
             await self._control()
+            await self._send_status_report_if_due()
             return {
                 "rooms": self.zone_status,
                 "mode": self.selected_mode(),
@@ -126,14 +147,91 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.exception("AC zone control cycle failed")
             raise UpdateFailed(f"AC zone control cycle failed: {err}") from err
 
+    async def _send_status_report_if_due(self) -> None:
+        """Send the configured status report on its independent wall-clock interval."""
+        if not self.notification_targets or self._next_notification_at is None:
+            return
+        now = monotonic()
+        if now < self._next_notification_at:
+            return
+
+        # Advance before calling HA so a transient notify error cannot create a
+        # burst of repeated attempts on every 30-second coordinator refresh.
+        self._next_notification_at = now + self.notification_interval * 60
+        try:
+            # Use the modern notify entity action so the configured device
+            # entities are explicit recipients instead of an implicit default.
+            await self.hass.services.async_call(
+                "notify",
+                "send_message",
+                {
+                    "entity_id": self.notification_targets,
+                    "title": "AC Zone Controller status",
+                    "message": self._build_status_report(),
+                },
+                blocking=False,
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Could not send the AC status notification")
+
+    def _build_status_report(self) -> str:
+        """Format the current system and per-room state for notify entities."""
+        house_sensor = self.entities.get(CONF_HOUSE_TEMPERATURE)
+        house_state = self.state(house_sensor)
+        house_temp = numeric(house_state)
+        house_unit = (
+            house_state.attributes.get("unit_of_measurement") or "°"
+            if house_state
+            else "°"
+        )
+        mode = self.physical_mode() or "unknown"
+        lines = [f"Daikin mode: {mode}"]
+        if house_temp is not None:
+            lines.append(f"House average: {house_temp:.1f}{house_unit}")
+
+        for room in self.rooms:
+            key = room[CONF_ROOM_KEY]
+            zone = self.zone_status.get(key, {})
+            temperature = zone.get("temperature")
+            target = zone.get("target")
+            temperature_state = self.state(room.get(CONF_ROOM_TEMPERATURE))
+            unit = (
+                temperature_state.attributes.get("unit_of_measurement") or "°"
+                if temperature_state
+                else "°"
+            )
+            temperature_text = (
+                f"{temperature:.1f}{unit}" if temperature is not None else "unavailable"
+            )
+            target_text = f"{target:.1f}{unit}" if target is not None else "not active"
+            cover_state = self.state(room.get(CONF_ROOM_COVER))
+            position = (
+                cover_state.attributes.get("current_position")
+                if cover_state
+                else None
+            )
+            vent_text = f"{position}%" if position is not None else (
+                cover_state.state if cover_state else "unavailable"
+            )
+            occupied = "yes" if zone.get("occupied") else "no"
+            enabled = "yes" if zone.get("enabled") else "no"
+            lines.append(
+                f"{room[CONF_ROOM_NAME]}: {temperature_text}; target {target_text}; "
+                f"occupied {occupied}; enabled {enabled}; vent {vent_text}"
+            )
+        return "\n".join(lines)
+
     def state(self, entity_id: str | None) -> Any:
+        """Return a live Home Assistant state, if the entity is available."""
         return self.hass.states.get(entity_id) if entity_id else None
 
     def physical_mode(self) -> str | None:
+        """Read the mode currently selected on the physical Daikin entity."""
         state = self.state(self.entities.get(CONF_CLIMATE))
         return str(state.state) if state else None
 
     def selected_mode(self) -> str | None:
+        """Return the user's heat/cool choice through temporary fan-only periods."""
         mode = self.physical_mode()
         if mode in CONDITIONING:
             return mode
@@ -144,16 +242,19 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return None
 
     def setting(self, key: str, room: str | None = None, default: float = 0.0) -> float:
+        """Read a global setting or a room-specific setting with a fallback."""
         if room:
             return float(self.settings.setdefault("rooms", {}).setdefault(room, {}).get(key, default))
         return float(self.settings.get(key, default))
 
     def room_target(self, key: str, mode: str) -> float:
+        """Choose the saved heat or cool target for one room."""
         field = "target_heat" if mode == HVACMode.HEAT else "target_cool"
         default = 23.5 if mode == HVACMode.HEAT else 22.0
         return self.setting(field, key, default)
 
     def gain(self, room: dict[str, Any]) -> float:
+        """Read a room gain helper when present, otherwise use the saved gain."""
         entity = room.get(CONF_ROOM_GAIN)
         if entity:
             value = numeric(self.state(entity))
@@ -162,6 +263,7 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return self.setting("gain", room[CONF_ROOM_KEY], 1.0)
 
     def enabled(self, room: dict[str, Any]) -> bool:
+        """Check the optional room-enable helper; unconfigured rooms stay enabled."""
         entity = room.get(CONF_ROOM_ENABLED)
         if not entity:
             return True
@@ -169,6 +271,7 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return bool(state and state.state == "on")
 
     def occupied(self, room: dict[str, Any]) -> bool:
+        """Treat any configured active media player as room presence."""
         players = room.get(CONF_ROOM_PRESENCE, [])
         if not players:
             return True
@@ -176,15 +279,18 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                    for entity in players)
 
     def door_open(self) -> bool:
+        """Return whether any configured door contact currently reports open."""
         return any((state := self.state(entity)) is not None and state.state == "on"
                    for entity in self.entities.get(CONF_DOORS, []))
 
     def external_solar_owner(self) -> bool:
+        """Check the external JARVIS flag before issuing solar-related mode changes."""
         entity = self.entities.get(CONF_SOLAR_ACTIVE)
         state = self.state(entity)
         return bool(state and state.state == "on")
 
     async def _control(self) -> None:
+        """Coordinate room demand while preserving the Daikin's manual heat/cool choice."""
         await self._process_heating_adjustments()
         if not self.smart_control_enabled():
             self.zone_status = self._calculate_zones(self.selected_mode())
@@ -260,6 +366,7 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_mode = mode
 
     def _calculate_zones(self, mode: str | None) -> dict[str, dict[str, Any]]:
+        """Build each room's demand and display state from its sensor and target."""
         result: dict[str, dict[str, Any]] = {}
         tolerance = self.setting("temperature_tolerance", default=0.6)
         step = self.setting("vent_step", default=10.0)
@@ -295,6 +402,7 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return result
 
     async def _control_vents(self, zones: dict[str, dict[str, Any]]) -> None:
+        """Move each vent by at most one configured step toward room demand."""
         step = self.setting("vent_step", default=10.0)
         for zone in zones.values():
             if zone["temperature"] is None:
@@ -319,6 +427,7 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
     async def _set_central_target(self, zones: dict[str, dict[str, Any]], mode: str) -> None:
+        """Set one shared Daikin target using the room with the strongest demand."""
         eligible = [z for z in zones.values() if z["enabled"] and z["occupied"]
                     and z["temperature"] is not None and z["target"] is not None]
         if not eligible:
@@ -576,6 +685,7 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.async_request_refresh()
 
     async def async_set_solar_enabled(self, enabled: bool) -> None:
+        """Save the integration's solar-controller enable state."""
         self.settings["solar_enabled"] = enabled
         if not enabled:
             self.solar_paused = False
@@ -584,6 +694,7 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.async_request_refresh()
 
     async def _save(self) -> None:
+        """Persist tuned targets, gains, and temporary mode ownership state."""
         await self._store.async_save({
             "settings": self.settings,
             "previous_mode": self.previous_mode,

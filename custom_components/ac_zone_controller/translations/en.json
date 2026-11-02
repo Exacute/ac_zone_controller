@@ -55,7 +55,16 @@
         "menu_options": {
           "add_room": "Add a room",
           "edit_room": "Edit a room",
-          "remove_room": "Remove a room"
+          "remove_room": "Remove a room",
+          "notifications": "AC status notifications"
+        }
+      },
+      "notifications": {
+        "title": "AC status notifications",
+        "description": "Send a room and system status report to selected notification devices. Leave recipients empty to disable reports.",
+        "data": {
+          "notification_interval": "Report interval (minutes)",
+          "notification_targets": "Notification devices"
         }
       },
       "add_room": {

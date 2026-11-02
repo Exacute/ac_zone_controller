@@ -17,6 +17,8 @@ from .const import (
     CONF_GLOBAL,
     CONF_HOUSE_TEMPERATURE,
     CONF_NAME,
+    CONF_NOTIFICATION_INTERVAL,
+    CONF_NOTIFICATION_TARGETS,
     CONF_POWER_SWITCH,
     CONF_ROOM_COVER,
     CONF_ROOM_ENABLED,
@@ -36,21 +38,25 @@ from .const import (
     CONF_HEAT_ADJUST_UP,
     CONF_HEAT_ADJUST_DOWN,
     DEFAULTS,
+    DEFAULT_NOTIFICATION_INTERVAL,
     DOMAIN,
 )
 
 
 def _entity(domain: str | list[str], *, multiple: bool = False) -> selector.EntitySelector:
+    """Create an entity selector restricted to the requested Home Assistant domain."""
     return selector.EntitySelector(
         selector.EntitySelectorConfig(domain=domain, multiple=multiple)
     )
 
 
 def _slug(value: str) -> str:
+    """Turn a user-facing room name into a stable lowercase key."""
     return re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
 
 
 def _room_schema(room: dict[str, Any] | None = None) -> vol.Schema:
+    """Build the add/edit form with current values when editing a room."""
     room = room or {}
     schema: dict[Any, Any] = {
         vol.Required(CONF_ROOM_NAME, default=room.get(CONF_ROOM_NAME, "")): str,
@@ -78,6 +84,7 @@ def _room_schema(room: dict[str, Any] | None = None) -> vol.Schema:
 
 
 def _clean_room(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalize form data before storing a room in config-entry options."""
     name = data[CONF_ROOM_NAME].strip()
     room = {
         CONF_ROOM_KEY: _slug(name),
@@ -98,6 +105,7 @@ class ACZoneConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     def __init__(self) -> None:
+        """Initialize the temporary values collected by the setup flow."""
         self._global: dict[str, Any] = {}
         self._rooms: list[dict[str, Any]] = []
 
@@ -197,7 +205,45 @@ class ACZoneOptionsFlow(config_entries.OptionsFlowWithReload):
         """Show options menu."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["add_room", "edit_room", "remove_room"],
+            menu_options=["add_room", "edit_room", "remove_room", "notifications"],
+        )
+
+    async def async_step_notifications(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Configure the recurring AC status report and its recipients."""
+        if user_input is not None:
+            # An empty target list intentionally disables reports without removing settings.
+            return self.async_create_entry(
+                title="",
+                data={**self.config_entry.options, **user_input},
+            )
+
+        current_interval = self.config_entry.options.get(
+            CONF_NOTIFICATION_INTERVAL, DEFAULT_NOTIFICATION_INTERVAL
+        )
+        current_targets = self.config_entry.options.get(CONF_NOTIFICATION_TARGETS, [])
+        return self.async_show_form(
+            step_id="notifications",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_NOTIFICATION_INTERVAL, default=current_interval
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=5,
+                            max=1440,
+                            step=5,
+                            mode=selector.NumberSelectorMode.BOX,
+                            unit_of_measurement="minutes",
+                        )
+                    ),
+                    # Required lets users save an empty list to clear old recipients.
+                    vol.Required(
+                        CONF_NOTIFICATION_TARGETS, default=current_targets
+                    ): _entity("notify", multiple=True),
+                }
+            ),
         )
 
     async def async_step_add_room(

@@ -32,6 +32,7 @@ class RoomErrorSensor(CoordinatorEntity[ACZoneCoordinator], SensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: ACZoneCoordinator, room: dict[str, Any]) -> None:
+        """Bind the room error sensor to the current thermostat demand."""
         super().__init__(coordinator)
         self.room = room
         self._attr_name = f"{room[CONF_ROOM_NAME]} temperature error"
@@ -65,6 +66,7 @@ class SolarStatusSensor(CoordinatorEntity[ACZoneCoordinator], SensorEntity):
     _attr_name = "Solar controller status"
 
     def __init__(self, coordinator: ACZoneCoordinator) -> None:
+        """Bind the solar status sensor to the shared coordinator."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_solar_status"
         self._attr_device_info = {

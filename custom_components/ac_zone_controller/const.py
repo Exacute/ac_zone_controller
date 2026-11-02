@@ -29,6 +29,10 @@ CONF_ROOM_PRESENCE: Final = "presence_entities"
 CONF_ROOM_GAIN: Final = "gain_entity"
 CONF_SETTINGS: Final = "settings"
 CONF_GLOBAL: Final = "global"
+CONF_NOTIFICATION_INTERVAL: Final = "notification_interval"
+CONF_NOTIFICATION_TARGETS: Final = "notification_targets"
+
+DEFAULT_NOTIFICATION_INTERVAL: Final = 60
 
 DEFAULTS: Final = {
     "temperature_tolerance": 0.6,

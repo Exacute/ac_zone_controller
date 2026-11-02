@@ -33,6 +33,7 @@ class RoomThermostat(CoordinatorEntity[ACZoneCoordinator], ClimateEntity):
     _attr_target_temperature_step = 0.5
 
     def __init__(self, coordinator: ACZoneCoordinator, room: dict[str, Any]) -> None:
+        """Bind a room's own target controls to the shared AC coordinator."""
         super().__init__(coordinator)
         self.room = room
         self._attr_name = room[CONF_ROOM_NAME]

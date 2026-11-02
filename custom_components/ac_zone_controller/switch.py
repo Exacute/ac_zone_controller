@@ -22,6 +22,7 @@ class SolarControllerSwitch(CoordinatorEntity[ACZoneCoordinator], SwitchEntity):
     _attr_icon = "mdi:solar-power"
 
     def __init__(self, coordinator: ACZoneCoordinator) -> None:
+        """Bind the opt-in solar switch to coordinator state."""
         super().__init__(coordinator)
         self._attr_unique_id = f"{coordinator.entry.entry_id}_solar_enabled"
         self._attr_device_info = {

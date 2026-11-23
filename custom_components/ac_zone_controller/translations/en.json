@@ -56,7 +56,8 @@
           "add_room": "Add a room",
           "edit_room": "Edit a room",
           "remove_room": "Remove a room",
-          "notifications": "AC status notifications"
+          "notifications": "AC status notifications",
+          "solar_mode": "Solar heating and cooling"
         }
       },
       "notifications": {
@@ -99,6 +100,14 @@
         "title": "Remove a room",
         "data": {
           "key": "Room"
+        }
+      },
+      "solar_mode": {
+        "title": "Solar heating and cooling",
+        "description": "Select an outdoor temperature sensor to enable automatic mode selection while the solar controller is on. Use indoor and outdoor sensors that report in °C. Clear the sensor to use the existing cooling-only behavior.",
+        "data": {
+          "outdoor_temperature": "Outdoor temperature sensor",
+          "solar_heat_target": "House heating target (°C)"
         }
       }
     },

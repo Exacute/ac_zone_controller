@@ -40,6 +40,8 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                          update_interval=timedelta(seconds=30))
         self.entry = entry
         self.entities = dict(entry.data)
+        if outdoor := entry.options.get(CONF_OUTDOOR_TEMPERATURE):
+            self.entities[CONF_OUTDOOR_TEMPERATURE] = outdoor
         self.rooms = list(entry.options.get(CONF_ROOMS, []))
         self.settings = dict(DEFAULTS)
         self.settings.update(entry.options.get(CONF_SETTINGS, {}))
@@ -58,6 +60,9 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.fan_owned = False
         self.target_stable_since: float | None = None
         self.last_tuned = 0.0
+        self.mode_requested_at = 0.0
+        self.solar_fan_started: float | None = None
+        self.solar_conditioning_mode: HVACMode | None = None
         self.last_solar_tick = 0.0
         self.low_generation_ticks = 0
         self.solar_paused = False
@@ -293,6 +298,8 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Coordinate room demand while preserving the Daikin's manual heat/cool choice."""
         await self._process_heating_adjustments()
         if not self.smart_control_enabled():
+            self.solar_fan_started = None
+            self.solar_conditioning_mode = None
             self.zone_status = self._calculate_zones(self.selected_mode())
             return
         self._observe_mode(self.physical_mode())
@@ -302,7 +309,30 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         solar_owns_mode = False
 
         self.zone_status = self._calculate_zones(mode)
-        await self._control_vents(self.zone_status)
+        auto_solar = (
+            self.settings.get("solar_enabled")
+            and self.entities.get(CONF_OUTDOOR_TEMPERATURE)
+            and not external_owner
+        )
+        if not auto_solar:
+            self.solar_fan_started = None
+            self.solar_conditioning_mode = None
+
+        if auto_solar:
+            solar_owns_mode = await self._solar_auto_mode(mode)
+            if self.physical_mode() == FAN and self.fan_owned and solar_owns_mode:
+                for zone in self.zone_status.values():
+                    zone["desired_position"] = 100.0
+                await self._control_vents(self.zone_status, circulate=True)
+            else:
+                await self._control_vents(self.zone_status)
+            if solar_owns_mode:
+                if self.physical_mode() in CONDITIONING and self._pending_mode != FAN:
+                    await self._set_central_target(self.zone_status, mode)
+                await self._hourly_gain_tune(mode)
+                return
+        else:
+            await self._control_vents(self.zone_status)
         if external_owner:
             self.target_stable_since = None
         else:
@@ -313,7 +343,7 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if self.physical_mode() in CONDITIONING:
                     await self._set_mode(FAN, preserve=mode)
                 solar_owns_mode = True
-            elif mode == HVACMode.COOL:
+            elif mode == HVACMode.COOL and not auto_solar:
                 solar_owns_mode = await self._solar_control()
             if not solar_owns_mode:
                 await self._control_hvac_mode(self.zone_status, mode)
@@ -363,6 +393,9 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self._pending_mode = None
             else:
                 self.fan_owned = False
+        if mode != self._last_mode and mode != self.solar_conditioning_mode and mode != FAN:
+            self.solar_conditioning_mode = None
+            self.solar_fan_started = None
         self._last_mode = mode
 
     def _calculate_zones(self, mode: str | None) -> dict[str, dict[str, Any]]:
@@ -401,13 +434,15 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
         return result
 
-    async def _control_vents(self, zones: dict[str, dict[str, Any]]) -> None:
+    async def _control_vents(
+        self, zones: dict[str, dict[str, Any]], *, circulate: bool = False
+    ) -> None:
         """Move each vent by at most one configured step toward room demand."""
         step = self.setting("vent_step", default=10.0)
         for zone in zones.values():
-            if zone["temperature"] is None:
+            if zone["temperature"] is None and not circulate:
                 continue
-            desired = zone["desired_position"] if zone["enabled"] and zone["occupied"] else 0.0
+            desired = zone["desired_position"] if zone["enabled"] and (circulate or zone["occupied"]) else 0.0
             state = self.state(zone["cover"])
             if state is None:
                 continue
@@ -480,6 +515,66 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         held = (all_reached and self.target_stable_since is not None
                 and now - self.target_stable_since >= self.setting("reached_delay", default=5))
         return not active or self.door_open() or held
+
+    async def _solar_auto_mode(self, mode: str | None) -> bool:
+        """Circulate air before selecting a solar conditioning mode."""
+        physical = self.physical_mode()
+        if self._pending_mode is not None:
+            if monotonic() - self.mode_requested_at < 60:
+                return True
+            self._pending_mode = None
+        if physical not in CONDITIONING and not (physical == FAN and self.fan_owned):
+            self.solar_fan_started = None
+            self.solar_conditioning_mode = None
+            return False
+
+        indoor = numeric(self.state(self.entities.get(CONF_HOUSE_TEMPERATURE)))
+        outdoor = numeric(self.state(self.entities.get(CONF_OUTDOOR_TEMPERATURE)))
+        generation = numeric(self.state(self.entities.get(CONF_SOLAR_GENERATION)))
+        load = numeric(self.state(self.entities.get(CONF_SOLAR_LOAD)))
+        grid = numeric(self.state(self.entities.get(CONF_GRID_POWER)))
+        ready = (
+            generation is not None
+            and generation >= self.setting("solar_resume_generation", default=500)
+            and load is not None
+            and grid is not None
+            and grid <= self.setting("solar_grid_limit", default=50)
+            and indoor is not None
+            and outdoor is not None
+            and not self.door_open()
+            and any(zone["enabled"] for zone in self.zone_status.values())
+        )
+        if not ready:
+            self.solar_fan_started = None
+            if physical in CONDITIONING and self.solar_conditioning_mode == physical:
+                await self._set_mode(FAN, preserve=mode)
+            self.solar_conditioning_mode = None
+            return physical == FAN or self._pending_mode == FAN
+
+        cooling_target = self.setting("solar_cool_temperature", default=26.0)
+        heating_target = self.entry.options.get(CONF_SOLAR_HEAT_TARGET, 23.5)
+        requested_mode = None
+        if outdoor > cooling_target and indoor > cooling_target:
+            requested_mode = HVACMode.COOL
+        elif outdoor < 15.0 and indoor < heating_target:
+            requested_mode = HVACMode.HEAT
+
+        if physical in CONDITIONING:
+            self.solar_fan_started = None
+            if self.solar_conditioning_mode == physical and requested_mode == physical:
+                return True
+            self.solar_conditioning_mode = None
+            await self._set_mode(FAN, preserve=mode)
+            return True
+
+        now = monotonic()
+        if self.solar_fan_started is None:
+            self.solar_fan_started = now
+        if now - self.solar_fan_started >= 15 * 60 and requested_mode is not None:
+            await self._set_mode(requested_mode, solar=True)
+            self.solar_conditioning_mode = requested_mode
+            self.solar_fan_started = None
+        return True
 
     async def _solar_control(self) -> bool:
         """Run solar protection only if the user has already selected cool."""
@@ -651,7 +746,7 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             blocking=False,
         )
 
-    async def _set_mode(self, mode: str, *, preserve: str | None = None) -> None:
+    async def _set_mode(self, mode: str, *, preserve: str | None = None, solar: bool = False) -> None:
         """Set fan temporarily or restore the user's earlier mode."""
         physical = self.physical_mode()
         if mode == FAN:
@@ -662,12 +757,14 @@ class ACZoneCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             elif physical != FAN:
                 return
         elif mode in CONDITIONING:
-            if not (physical == FAN and self.fan_owned and self.previous_mode == mode):
+            if not (physical == FAN and self.fan_owned and (solar or self.previous_mode == mode)):
                 return
             self._pending_mode = mode
-            self.fan_owned = False
+            if not solar:
+                self.fan_owned = False
         else:
             return
+        self.mode_requested_at = monotonic()
         await self._save()
         await self.hass.services.async_call(
             "climate", "set_hvac_mode",

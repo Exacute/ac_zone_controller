@@ -29,6 +29,8 @@ from .const import (
     CONF_ROOM_TEMPERATURE,
     CONF_ROOMS,
     CONF_SETTINGS,
+    CONF_OUTDOOR_TEMPERATURE,
+    CONF_SOLAR_HEAT_TARGET,
     CONF_SOLAR_ACTIVE,
     CONF_SOLAR_GENERATION,
     CONF_SOLAR_LOAD,
@@ -205,7 +207,29 @@ class ACZoneOptionsFlow(config_entries.OptionsFlowWithReload):
         """Show options menu."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["add_room", "edit_room", "remove_room", "notifications"],
+            menu_options=["add_room", "edit_room", "remove_room", "notifications", "solar_mode"],
+        )
+
+    async def async_step_solar_mode(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Configure the outdoor sensor and house solar heating target."""
+        current = self.config_entry.options
+        if user_input is not None:
+            options = dict(current)
+            options.pop(CONF_OUTDOOR_TEMPERATURE, None)
+            return self.async_create_entry(title="", data={**options, **user_input})
+
+        schema = vol.Schema({
+            vol.Optional(CONF_OUTDOOR_TEMPERATURE): _entity("sensor"),
+            vol.Required(
+                CONF_SOLAR_HEAT_TARGET,
+                default=current.get(CONF_SOLAR_HEAT_TARGET, 23.5),
+            ): vol.All(vol.Coerce(float), vol.Range(min=16, max=30)),
+        })
+        return self.async_show_form(
+            step_id="solar_mode",
+            data_schema=self.add_suggested_values_to_schema(schema, current),
         )
 
     async def async_step_notifications(
